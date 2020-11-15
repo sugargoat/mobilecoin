@@ -293,7 +293,7 @@ pub fn setup_client(uri: &MobilecoindUri, logger: &Logger) -> MobilecoindApiClie
 }
 
 /// Create a ready test environment.
-/// Recipients can be randomly gernerated or passed in.
+/// Recipients can be randomly generated or passed in.
 /// The ledger has GET_TESTING_ENVIRONMENT_NUM_BLOCKS blocks. Each block has one txo per recipient.
 /// Monitors are created for each provided MonitorData.
 /// The function delays return until all monitors have processed the entire ledger.

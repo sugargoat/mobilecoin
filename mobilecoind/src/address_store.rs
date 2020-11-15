@@ -7,9 +7,12 @@
 
 use crate::error::Error;
 
-use lmdb::{Database, DatabaseFlags, Environment, RwTransaction, Transaction, WriteFlags};
+use lmdb::{Cursor, Database, DatabaseFlags, Environment, RwTransaction, Transaction, WriteFlags};
 use mc_account_keys::{AccountKey, PublicAddress};
-use mc_common::logger::{log, Logger};
+use mc_common::{
+    logger::{log, Logger},
+    HashMap,
+};
 use prost::Message;
 use std::sync::Arc;
 
@@ -131,6 +134,27 @@ impl AddressStore {
     }
 
      */
+    pub fn list_addresses(
+        &self,
+        db_txn: &impl Transaction,
+    ) -> Result<HashMap<PublicAddress, AddressData>, Error> {
+        let mut cursor = db_txn.open_ro_cursor(self.address_data)?;
+        Ok(cursor
+            .iter()
+            .map(|result| {
+                result
+                    .map_err(Error::from)
+                    .and_then(|(key_bytes, value_bytes)| {
+                        Ok((
+                            mc_util_serial::decode(key_bytes)
+                                .map_err(|_| Error::KeyDeserializationError)?,
+                            mc_util_serial::decode(value_bytes)
+                                .map_err(|_| Error::KeyDeserializationError)?,
+                        ))
+                    })
+            })
+            .collect::<Result<HashMap<_, _>, Error>>()?)
+    }
 }
 
 #[cfg(test)]

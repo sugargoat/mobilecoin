@@ -1542,41 +1542,93 @@ impl<
     // API Version 2
     // ********************************************************************************
 
+    /// Helper - not currently exposed in the API. Can be called via `create_address` with
+    /// `new_account = true`
+    fn new_account_with_defaults(&mut self, comment: String) -> Result<MonitorId, RpcStatus> {
+        // FIXME: They must have a way to get this entropy back. We probably want to make this an explicit action?
+        // Otherwise, they can get the account key from the monitor store, but not the entropy.
+        let entropy_resp = self
+            .generate_entropy_impl(mc_mobilecoind_api::Empty::new())
+            .map_err(|err| rpc_internal_error("generate_entropy", err, &self.logger))?;
+        let mut account_req = mc_mobilecoind_api::GetAccountKeyRequest::new();
+        account_req.set_entropy(entropy_resp.get_entropy().to_vec());
+        let account_resp = self
+            .get_account_key_impl(account_req)
+            .map_err(|err| rpc_internal_error("get_account_key", err, &self.logger))?;
+        let account_key = AccountKey::try_from(account_resp.get_account_key())
+            .map_err(|err| rpc_internal_error("account_key.from", err, &self.logger))?;
+        Ok(self
+            .mobilecoind_db
+            .add_account_with_defaults(&account_key, comment)
+            .map_err(|err| {
+                rpc_internal_error(
+                    "mobilecoind_db.add_account_with_defaults",
+                    err,
+                    &self.logger,
+                )
+            })?)
+    }
+
     /// Creates an address.
     /// This convenience method does the following:
     /// * Default: Provides the public address for the next subaddress in the active account
-    /// * If `expected_sender` provided: Includes the expected sender associated with this subaddress
-    /// * If `new_account` provided: Creates a new account and returns subaddress 0
+    /// * If `new_account` provided or no current accounts: Creates a new account and returns
+    ///     subaddress 0
     fn create_address_impl(
         &mut self,
         request: mc_mobilecoind_api::CreateAddressRequest,
     ) -> Result<mc_mobilecoind_api::CreateAddressResponse, RpcStatus> {
-        // Get the active account
-        let active_account = match self.mobilecoind_db.get_active_account().map_err(|err| {
+        let active_account = self.mobilecoind_db.get_active_account().map_err(|err| {
             rpc_internal_error("mobilecoind_db.get_active_account", err, &self.logger)
-        })? {
-            Some(active) => active,
-            None => {
+        })?;
+
+        // If we have no active accounts but we do not want to create a new account, return error.
+        if active_account.is_none() && !request.new_account {
+            // Verify that we have no accounts. Otherwise, the user will need to explicitly set
+            // the active account before we can proceed.
+            let accounts = self.mobilecoind_db.list_accounts().map_err(|err| {
+                rpc_internal_error("mobilecoind_db.list_accounts", err, &self.logger)
+            })?;
+            return Err(rpc_internal_error(
+                format!("No active account, and new account not requested. Please add a new account or set the active account. Current accounts: {:?}.", accounts),
+                Error::NoActiveAccount,
+                &self.logger,
+            ));
+        }
+
+        let monitor_id;
+        let next_subaddress_index;
+        // Create a new account if requested, and make sure it is set to the active account. // FIXME remove active account idea - it's too messy
+        if request.new_account {
+            monitor_id = self
+                .new_account_with_defaults(request.comment.clone())
+                .map_err(|err| {
+                    rpc_internal_error("new_account_with_defaults", err, &self.logger)
+                })?;
+            next_subaddress_index = 1;
+        // FIXME: this will not set the new account to the active account if there was already an active
+        } else {
+            if let Some(active) = active_account {
+                monitor_id = MonitorId::try_from(&active.monitor_id)
+                    .map_err(|err| rpc_internal_error("MonitorId::try_from", err, &self.logger))?;
+                next_subaddress_index = active.next_subaddress_index;
+            } else {
                 return Err(rpc_internal_error(
-                    "create_address",
+                    format!("No active account and new account not requested."),
                     Error::NoActiveAccount,
                     &self.logger,
                 ));
             }
-        };
+        }
 
         // Check that the next subaddress is within the range
-        let monitor_id = MonitorId::try_from(&active_account.monitor_id)
-            .map_err(|err| rpc_internal_error("monitor_id.try_from", err, &self.logger))?;
         let monitor_data = self
             .mobilecoind_db
             .get_monitor_data(&monitor_id)
             .map_err(|err| {
                 rpc_internal_error("mobilecoind_db.get_monitor_data", err, &self.logger)
             })?;
-        if active_account.next_subaddress_index
-            > monitor_data.first_subaddress + monitor_data.num_subaddresses
-        {
+        if next_subaddress_index > monitor_data.first_subaddress + monitor_data.num_subaddresses {
             return Err(rpc_internal_error(
                 "mobilecoind_db.monitor",
                 Error::NextSubaddressOutOfRange,
@@ -1586,8 +1638,8 @@ impl<
 
         // Get the public address for the next subaddress
         let mut pubaddress_request = mc_mobilecoind_api::GetPublicAddressRequest::new();
-        pubaddress_request.monitor_id = active_account.monitor_id.to_vec();
-        pubaddress_request.subaddress_index = active_account.next_subaddress_index;
+        pubaddress_request.monitor_id = monitor_id.to_vec();
+        pubaddress_request.subaddress_index = next_subaddress_index;
         let pubaddress_resp = self.get_public_address_impl(pubaddress_request)?;
 
         // Update the database
@@ -4506,8 +4558,8 @@ mod test {
         let (_ledger_db, _mobilecoind_db, client, _server, _server_conn_manager) =
             get_testing_environment(3, &vec![], &vec![], logger.clone(), &mut rng);
 
-        // Need to add an account so that we have an existing account
-        // FIXME: Should we just bite the bullet and make a "create account" call?
+        // Need to add an account so that we have an existing account - using API V1
+        // as test_create_address_new tests the create_address pathway.
         let entropy_resp = client
             .generate_entropy(&mc_mobilecoind_api::Empty::new())
             .unwrap();
@@ -4527,7 +4579,7 @@ mod test {
         request.new_account = false;
         let _response = client
             .create_address(&request)
-            .expect("Could not create address");
+            .expect("Could not create address from existing");
     }
 
     // Test creating an address with no active account fails
@@ -4535,23 +4587,30 @@ mod test {
     fn test_create_address_no_active_account(logger: Logger) {
         let mut rng: StdRng = SeedableRng::from_seed([23u8; 32]);
 
-        let sender = AccountKey::random(&mut rng);
-
-        // 1 known recipient, 3 random recipients and no monitors.
+        // 3 random recipients and no monitors.
         let (_ledger_db, _mobilecoind_db, client, _server, _server_conn_manager) =
-            get_testing_environment(
-                3,
-                &vec![sender.default_subaddress()],
-                &vec![],
-                logger.clone(),
-                &mut rng,
-            );
+            get_testing_environment(3, &vec![], &vec![], logger.clone(), &mut rng);
 
         let mut request = mc_mobilecoind_api::CreateAddressRequest::new();
         request.new_account = false;
-        // FIXME: would love to parse the exact error - should throw NoActiveAccount
+        // FIXME: would love to parse the exact error - should throw NoActiveAccount,
+        //        but it's a bit hard to parse grpcio RpcStatus errors in a consistent way
         assert!(client.create_address(&request).is_err());
     }
 
-    // TODO: Test creating address with "new_account"
+    // Test creating an address with new_account = true
+    #[test_with_logger]
+    fn test_create_address_new(logger: Logger) {
+        let mut rng: StdRng = SeedableRng::from_seed([23u8; 32]);
+
+        // 3 random recipients and no monitors.
+        let (_ledger_db, _mobilecoind_db, client, _server, _server_conn_manager) =
+            get_testing_environment(3, &vec![], &vec![], logger.clone(), &mut rng);
+
+        let mut request = mc_mobilecoind_api::CreateAddressRequest::new();
+        request.new_account = true;
+        client
+            .create_address(&request)
+            .expect("Could not create new address");
+    }
 }

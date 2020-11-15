@@ -4,7 +4,7 @@
 
 use crate::error::Error;
 
-use lmdb::{Database, DatabaseFlags, Environment, RwTransaction, Transaction, WriteFlags};
+use lmdb::{Cursor, Database, DatabaseFlags, Environment, RwTransaction, Transaction, WriteFlags};
 use mc_account_keys::AccountKey;
 use mc_common::logger::{log, Logger};
 use prost::Message;
@@ -63,7 +63,7 @@ impl AccountStore {
         })
     }
 
-    /// Insert a new Account into the database.
+    /// Insert or update an Account in the database.
     pub fn insert<'env>(
         &self,
         db_txn: &mut RwTransaction<'env>,
@@ -77,11 +77,11 @@ impl AccountStore {
             self.account_data,
             &account_db_key,
             &value_bytes,
-            WriteFlags::NO_OVERWRITE,
+            WriteFlags::empty(),
         ) {
             Ok(_) => Ok(()),
-            Err(lmdb::Error::KeyExist) => Err(Error::AccountExists),
-            Err(err) => Err(err.into()),
+            Err(lmdb::Error::KeyExist) => Ok(()),
+            Err(err) => Err(Error::from(err)),
         }?;
 
         log::trace!(
@@ -94,10 +94,7 @@ impl AccountStore {
         match self.get_active(db_txn)? {
             // FIXME: map_or_else more concise?
             Some(_) => {}
-            None => {
-                log::trace!(self.logger, "Setting active account {:?}", account);
-                self.set_active(db_txn, &account)?
-            }
+            None => self.set_active(db_txn, &account)?,
         };
 
         Ok(())
@@ -155,18 +152,11 @@ impl AccountStore {
         &self,
         db_txn: &impl Transaction,
     ) -> Result<Option<AccountData>, Error> {
-        log::trace!(self.logger, "Now getting active");
         let active = db_txn.get(self.active, &ACTIVE_KEY)?;
-
-        log::trace!(self.logger, "Got active key = {:?}", active);
         if active == Vec::<u8>::new() {
-            log::trace!(self.logger, "empty vec so returning None");
             return Ok(None);
         }
-
         let active_account: AccountKey = mc_util_serial::decode(active)?;
-        log::trace!(self.logger, "Got active account = {:?}", active_account);
-
         Ok(Some(self.get(db_txn, &active_account)?))
     }
 
@@ -175,10 +165,7 @@ impl AccountStore {
         db_txn: &mut RwTransaction<'env>,
         account: &AccountKey,
     ) -> Result<(), Error> {
-        log::trace!(self.logger, "\x1b[1;33mNow in Set active\x1b[0m");
-
         let account_db_key = mc_util_serial::encode(account);
-        log::trace!(self.logger, "Setting active to {:?}", account_db_key);
         // Verify that account is in DB
         match db_txn.get(self.account_data, &account_db_key) {
             Ok(_) => {
@@ -195,7 +182,20 @@ impl AccountStore {
         }
     }
 
-    // TODO: ListAccounts
+    pub fn list_accounts(&self, db_txn: &impl Transaction) -> Result<Vec<AccountData>, Error> {
+        let mut cursor = db_txn.open_ro_cursor(self.account_data)?;
+        Ok(cursor
+            .iter()
+            .map(|result| {
+                result
+                    .map_err(Error::from)
+                    .and_then(|(key_bytes, _value_bytes)| {
+                        mc_util_serial::decode(key_bytes)
+                            .map_err(|_| Error::KeyDeserializationError)
+                    })
+            })
+            .collect::<Result<Vec<_>, Error>>()?)
+    }
 }
 
 #[cfg(test)]

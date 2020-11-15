@@ -14,7 +14,7 @@ use crate::{
 
 use crate::utxo_store::UnspentTxOut;
 use lmdb::{Environment, Transaction};
-use mc_account_keys::AccountKey;
+use mc_account_keys::{AccountKey, PublicAddress};
 use mc_common::{
     logger::{log, Logger},
     HashMap,
@@ -344,7 +344,6 @@ impl Database {
             monitor_id: monitor_id.to_vec(),
             next_subaddress_index,
         };
-        log::info!(self.logger, "Inserting new account");
         let mut db_txn = self.env.begin_rw_txn()?;
         self.account_store
             .insert(&mut db_txn, account_key, &account_data)?;
@@ -360,7 +359,6 @@ impl Database {
             comment,
         };
         let next_public_address = account_key.subaddress(next_subaddress_index);
-        log::info!(self.logger, "Inserting new address");
         let mut db_txn = self.env.begin_rw_txn()?;
         self.address_store
             .insert(&mut db_txn, &next_public_address, &address_data)?;
@@ -372,7 +370,7 @@ impl Database {
         &self,
         account_key: &AccountKey,
         comment: String,
-    ) -> Result<(), Error> {
+    ) -> Result<MonitorId, Error> {
         // Add default monitor data.
         let data = MonitorData::new(
             account_key.clone(),
@@ -395,7 +393,7 @@ impl Database {
             DEFAULT_SUBADDRESS_EXPIRATION,
             comment,
         )?;
-        Ok(())
+        Ok(monitor_id)
     }
 
     pub fn add_next_subaddress(
@@ -425,6 +423,18 @@ impl Database {
         self.account_store
             .update_next_subaddress(&mut db_txn, account_key)?;
         Ok(())
+    }
+
+    pub fn list_accounts(&self) -> Result<Vec<AccountData>, Error> {
+        let db_txn = self.env.begin_ro_txn()?;
+        let accounts = self.account_store.list_accounts(&db_txn)?;
+        Ok(accounts)
+    }
+
+    pub fn list_addresses(self) -> Result<HashMap<PublicAddress, AddressData>, Error> {
+        let db_txn = self.env.begin_ro_txn()?;
+        let addresses = self.address_store.list_addresses(&db_txn)?;
+        Ok(addresses)
     }
 }
 
