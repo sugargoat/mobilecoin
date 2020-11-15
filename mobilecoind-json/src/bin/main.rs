@@ -12,7 +12,8 @@ use mc_mobilecoind_json::data_types::*;
 use mc_util_grpc::ConnectionUriGrpcioChannel;
 use protobuf::RepeatedField;
 use rocket::{delete, get, post, routes};
-use rocket_contrib::json::Json;
+use rocket_contrib::json::{Json, JsonValue};
+use serde_json::json;
 use std::{convert::TryFrom, sync::Arc};
 use structopt::StructOpt;
 
@@ -20,7 +21,7 @@ use structopt::StructOpt;
 /// a standard mobilecoind instance
 #[derive(Clone, Debug, StructOpt)]
 #[structopt(name = "mobilecoind-json", about = "A REST frontend for mobilecoind")]
-pub struct Config {
+pub struct APIConfig {
     /// Host to listen on.
     #[structopt(long, default_value = "127.0.0.1")]
     pub listen_host: String,
@@ -649,54 +650,30 @@ fn tx_out_get_block_index_by_public_key(
 #[post("/wallet", format = "json", data = "<request>")]
 fn wallet_action(
     state: rocket::State<State>,
-    request: Json<JsonWalletRequest>,
-) -> Result<Json<JsonWalletResponse>, String> {
-    match request.method {
+    request: JsonWalletRequest,
+) -> Result<JsonValue, String> {
+    match request.method.as_str() {
         "create_address" => {
             let mut req = mc_mobilecoind_api::CreateAddressRequest::new();
-            req.expiration = request.params.expiration;
-            req.comment = request.params.comment;
-            req.expected_sender = request.params.expected_sender;
-            req.new_account = request.params.new_account;
+            req.expiration = request.params["expiration"]
+                .to_string()
+                .parse::<u64>()
+                .map_err(|_| "Could not parse u64")?;
+            req.comment = request.params["comment"].to_string();
+            req.account_id = hex::decode(request.params["account_id"].to_string())
+                .map_err(|_| "Could not decode hex")?;
             let resp = state
                 .mobilecoind_api_client
                 .create_address(&req)
                 .map_err(|err| format!("Failed creating request: {}", err))?;
-            Ok(Json(JsonWalletResponse::from(&resp)))
+            // FIXME: why doesn't it find protobuf::json??
+            Ok(json!(protobuf::text_format::print_to_string(&resp)).into())
         }
         _ => Err("Could not parse request method".to_string()),
     }
 }
 
-fn main() {
-    mc_common::setup_panic_handler();
-    let _sentry_guard = mc_common::sentry::init();
-
-    let config = Config::from_args();
-
-    let (logger, _global_logger_guard) = create_app_logger(o!());
-    log::info!(
-        logger,
-        "Starting mobilecoind HTTP gateway on {}:{}, connecting to {}",
-        config.listen_host,
-        config.listen_port,
-        config.mobilecoind_uri,
-    );
-
-    // Set up the gRPC connection to the mobilecoind client
-    let env = Arc::new(grpcio::EnvBuilder::new().cq_count(1).build());
-    let ch = ChannelBuilder::new(env)
-        .max_receive_message_len(std::i32::MAX)
-        .max_send_message_len(std::i32::MAX)
-        .connect_to_uri(&config.mobilecoind_uri, &logger);
-
-    let mobilecoind_api_client = MobilecoindApiClient::new(ch);
-
-    let rocket_config = rocket::Config::build(rocket::config::Environment::Production)
-        .address(&config.listen_host)
-        .port(config.listen_port)
-        .unwrap();
-
+fn rocket(rocket_config: rocket::Config, state: State) -> rocket::Rocket {
     rocket::custom(rocket_config)
         .mount(
             "/",
@@ -728,8 +705,113 @@ fn main() {
                 wallet_action,
             ],
         )
-        .manage(State {
+        .manage(state)
+}
+
+fn main() {
+    mc_common::setup_panic_handler();
+    let _sentry_guard = mc_common::sentry::init();
+
+    let config = APIConfig::from_args();
+
+    let (logger, _global_logger_guard) = create_app_logger(o!());
+    log::info!(
+        logger,
+        "Starting mobilecoind HTTP gateway on {}:{}, connecting to {}",
+        config.listen_host,
+        config.listen_port,
+        config.mobilecoind_uri,
+    );
+
+    // Set up the gRPC connection to the mobilecoind client
+    let env = Arc::new(grpcio::EnvBuilder::new().cq_count(1).build());
+    let ch = ChannelBuilder::new(env)
+        .max_receive_message_len(std::i32::MAX)
+        .max_send_message_len(std::i32::MAX)
+        .connect_to_uri(&config.mobilecoind_uri, &logger);
+
+    let mobilecoind_api_client = MobilecoindApiClient::new(ch);
+
+    let rocket_config: rocket::Config =
+        rocket::Config::build(rocket::config::Environment::Production)
+            .address(&config.listen_host)
+            .port(config.listen_port)
+            .unwrap();
+
+    rocket(
+        rocket_config,
+        State {
             mobilecoind_api_client,
-        })
-        .launch();
+        },
+    )
+    .launch();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc_common::logger::{test_with_logger, Logger};
+    use mc_mobilecoind::test_utils::{get_free_port, get_testing_environment};
+    use rand::{rngs::StdRng, SeedableRng};
+    use rocket::{
+        http::{ContentType, Status},
+        local::Client,
+    };
+
+    fn setup(state: State) -> Client {
+        let mut rocket_config: rocket::Config = rocket::Config::development();
+        rocket_config.set_port(get_free_port());
+        let rocket = rocket(rocket_config, state);
+        Client::new(rocket).expect("valid rocket instance")
+    }
+
+    #[test_with_logger]
+    fn test_entropy(logger: Logger) {
+        let mut rng: StdRng = SeedableRng::from_seed([20u8; 32]);
+        // 3 random recipients and no monitors.
+        let (_ledger_db, _mobilecoind_db, mobilecoind_api_client, _server, _server_conn_manager) =
+            get_testing_environment(3, &vec![], &vec![], logger.clone(), &mut rng);
+        let client = setup(State {
+            mobilecoind_api_client,
+        });
+
+        let mut res = client
+            .post("/entropy")
+            .header(ContentType::JSON)
+            .body(r#""#)
+            .dispatch();
+        assert_eq!(res.status(), Status::Ok);
+        let body = res.body().unwrap().into_string().unwrap();
+        log::info!(logger, "Attempted dispatch got response {:?}", body);
+        let res_json: JsonValue = serde_json::from_str(&body).unwrap();
+        assert!(res_json.get("entropy").is_some());
+    }
+
+    #[test_with_logger]
+    fn test_create_account(logger: Logger) {
+        let mut rng: StdRng = SeedableRng::from_seed([20u8; 32]);
+        // 3 random recipients and no monitors.
+        let (_ledger_db, _mobilecoind_db, mobilecoind_api_client, _server, _server_conn_manager) =
+            get_testing_environment(3, &vec![], &vec![], logger.clone(), &mut rng);
+        let client = setup(State {
+            mobilecoind_api_client,
+        });
+
+        let body = json!({
+        "method": "create_address",
+        "params": {
+            "expiration": 0,
+             "comment": "Alice",
+             "account_id": ""
+        }
+        });
+        let mut res = client
+            .post("/wallet")
+            .header(ContentType::JSON)
+            .body(body.to_string())
+            .dispatch();
+        let body = res.body().unwrap().into_string().unwrap();
+        log::info!(logger, "Attempted dispatch got response {:?}", body);
+        assert_eq!(res.status(), Status::Ok);
+    }
 }

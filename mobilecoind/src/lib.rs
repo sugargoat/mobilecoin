@@ -21,4 +21,4 @@ mod sync;
 mod utxo_store;
 
 #[cfg(any(test, feature = "test_utils"))]
-mod test_utils;
+pub mod test_utils;

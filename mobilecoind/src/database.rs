@@ -31,7 +31,7 @@ use std::{
 const MAX_LMDB_FILE_SIZE: usize = 1_099_511_627_776; // 1 TB
 
 // Constants for API
-const DEFAULT_NUM_SUBADDRESSES: u64 = 100_000; // FIXME: what is optimal
+const DEFAULT_NUM_SUBADDRESSES: u64 = 100; // FIXME: what is optimal? 151s to add 10000, 18s to add 1000, 5s to add 100,
 const DEFAULT_FIRST_SUBADDRESS: u64 = 0;
 const DEFAULT_FIRST_BLOCK: u64 = 0;
 pub const DEFAULT_SUBADDRESS_EXPIRATION: u64 = 0; // Never expire
@@ -423,6 +423,12 @@ impl Database {
         self.account_store
             .update_next_subaddress(&mut db_txn, account_key)?;
         Ok(())
+    }
+
+    pub fn get_account_data(&self, account_key: &AccountKey) -> Result<AccountData, Error> {
+        let db_txn = self.env.begin_ro_txn()?;
+        let account_data = self.account_store.get(&db_txn, account_key)?;
+        Ok(account_data)
     }
 
     pub fn list_accounts(&self) -> Result<Vec<AccountData>, Error> {

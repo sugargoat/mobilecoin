@@ -66,7 +66,9 @@ service MobilecoindAPI {
     // 1. A single account is the "master" account, with the master subaddress defaulted to 0
     // 2. To track senders, you must make an additional call to register the expected sender's ID
 
+    rpc CreateAccount (CreateAccountRequest) returns (CreateAccountResponse) {}
     rpc CreateAddress (CreateAddressRequest) returns (CreateAddressResponse) {}
+    rpc GetAddress (GetAddressRequest) returns (GetAddressResponse) {}
 //    rpc ValidateAddress (ValidateAddressRequest) returns (ValidateAddressResponse) {}
 //    rpc AddrList (AddrListRequest) returns (AddrListResponse) {}
 //    rpc DeleteAddress (DeleteAddressRequest) returns (DeleteAddressResponse) {}
@@ -727,21 +729,47 @@ message GetNetworkStatusResponse {
 // API Version 2
 //
 
+message CreateAccountRequest {
+    // A comment associated with this account.
+    string comment = 2;
+}
+
+message CreateAccountResponse {
+    // The public address for the newly created account.
+    string public_address = 1;
+
+    // The entropy for this account. This must be safeguarded.
+    bytes entropy = 2;
+
+    // The account id for the newly created account.
+    // Note: this maps to API V1 as the monitor_id.
+    bytes account_id = 3;
+}
+
 // Create a new address in the wallet.
 message CreateAddressRequest {
+    // The account id for which to create an address.
+    bytes account_id = 1;
+
     // The number of seconds after which the address expires
-    uint64 expiration = 1;
+    uint64 expiration = 2;
 
     // A comment associated with this address
-    string comment = 2;
-
-    // Whether to create a new account. If new_account is true, creates a new account and returns subaddress 0.
-    // Default behavior is to create a new subaddress from the active account.
-    bool new_account = 3;
+    string comment = 3;
 }
 
 message CreateAddressResponse {
     // The public address for the newly created account
+    string public_address = 1;
+}
+
+message GetAddressRequest {
+    bytes account_id = 1;
+
+    uint64 subaddress_index = 2;
+}
+
+message GetAddressResponse {
     string public_address = 1;
 }
 
