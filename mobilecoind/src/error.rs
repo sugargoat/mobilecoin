@@ -12,6 +12,7 @@ use mc_util_lmdb::MetadataStoreError;
 use mc_util_serial::{decode::Error as DecodeError, encode::Error as EncodeError};
 use prost::DecodeError as ProstDecodeError;
 use retry::Error as RetryError;
+use std::time::SystemTimeError;
 
 #[derive(Debug, Fail)]
 pub enum Error {
@@ -113,6 +114,30 @@ pub enum Error {
 
     #[fail(display = "No peers configured - running in offline mode")]
     NoPeersConfigured,
+
+    // FIXME: remove fail from all errors, add address to error message
+    #[fail(display = "Address not found")]
+    AddressNotFound,
+
+    // FIXME: remove fail from all errors, add to error message
+    #[fail(display = "Account exists")]
+    AccountExists,
+
+    // FIXME: remove fail from all errors, add to error message
+    #[fail(display = "Account not found")]
+    AccountNotFound,
+
+    // FIXME: remove fail from all errors, add to error message
+    #[fail(display = "Next subaddress for this account is out of range")]
+    NextSubaddressOutOfRange,
+
+    // FIXME: remove fail from all errors, add to error message
+    #[fail(display = "No active account")]
+    NoActiveAccount,
+
+    // FIXME: remove fail from all errors, add to error message
+    #[fail(display = "Error getting system time {}", _0)]
+    SystemTime(SystemTimeError),
 }
 
 impl From<RetryError<ConnectionError>> for Error {
@@ -178,5 +203,11 @@ impl From<KeyError> for Error {
 impl From<MetadataStoreError> for Error {
     fn from(e: MetadataStoreError) -> Self {
         Self::MetadataStore(e)
+    }
+}
+
+impl From<SystemTimeError> for Error {
+    fn from(e: SystemTimeError) -> Self {
+        Self::SystemTime(e)
     }
 }

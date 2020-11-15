@@ -9,6 +9,8 @@ pub mod database;
 pub mod payments;
 pub mod service;
 
+mod account_store;
+mod address_store;
 mod conversions;
 mod database_key;
 mod error;

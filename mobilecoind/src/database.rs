@@ -3,6 +3,8 @@
 //! The mobilecoind database
 
 use crate::{
+    account_store::{AccountData, AccountStore},
+    address_store::{AddressData, AddressStore},
     error::Error,
     monitor_store::{MonitorData, MonitorId, MonitorStore},
     processed_block_store::{ProcessedBlockStore, ProcessedTxOut},
@@ -12,16 +14,27 @@ use crate::{
 
 use crate::utxo_store::UnspentTxOut;
 use lmdb::{Environment, Transaction};
+use mc_account_keys::AccountKey;
 use mc_common::{
     logger::{log, Logger},
     HashMap,
 };
 use mc_transaction_core::ring_signature::KeyImage;
 use mc_util_lmdb::{MetadataStore, MetadataStoreSettings};
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 // LMDB Constants
 const MAX_LMDB_FILE_SIZE: usize = 1_099_511_627_776; // 1 TB
+
+// Constants for API
+const DEFAULT_NUM_SUBADDRESSES: u64 = 100_000; // FIXME: what is optimal
+const DEFAULT_FIRST_SUBADDRESS: u64 = 0;
+const DEFAULT_FIRST_BLOCK: u64 = 0;
+pub const DEFAULT_SUBADDRESS_EXPIRATION: u64 = 0; // Never expire
 
 /// Metadata store settings that are used for version control.
 #[derive(Clone, Default, Debug)]
@@ -61,6 +74,12 @@ pub struct Database {
     /// Metadata store.
     metadata_store: MetadataStore<MobilecoindDbMetadataStoreSettings>,
 
+    /// Address store.
+    address_store: AddressStore,
+
+    /// Account store.
+    account_store: AccountStore,
+
     /// Logger.
     logger: Logger,
 }
@@ -92,6 +111,8 @@ impl Database {
         let subaddress_store = SubaddressStore::new(env.clone(), logger.clone())?;
         let utxo_store = UtxoStore::new(env.clone(), logger.clone())?;
         let processed_block_store = ProcessedBlockStore::new(env.clone(), logger.clone())?;
+        let address_store = AddressStore::new(env.clone(), logger.clone())?;
+        let account_store = AccountStore::new(env.clone(), logger.clone())?;
 
         Ok(Self {
             env,
@@ -100,6 +121,8 @@ impl Database {
             utxo_store,
             processed_block_store,
             metadata_store,
+            address_store,
+            account_store,
             logger,
         })
     }
@@ -302,6 +325,106 @@ impl Database {
 
         self.processed_block_store
             .get_processed_block(&db_txn, monitor_id, block_num)
+    }
+
+    pub fn get_active_account(&self) -> Result<Option<AccountData>, Error> {
+        let db_txn = self.env.begin_ro_txn()?;
+        Ok(self.account_store.get_active(&db_txn)?)
+    }
+
+    pub fn add_account(
+        &self,
+        account_key: &AccountKey,
+        monitor_id: &MonitorId,
+        next_subaddress_index: u64,
+        expiration: u64,
+        comment: String,
+    ) -> Result<(), Error> {
+        let account_data = AccountData {
+            monitor_id: monitor_id.to_vec(),
+            next_subaddress_index,
+        };
+        log::info!(self.logger, "Inserting new account");
+        let mut db_txn = self.env.begin_rw_txn()?;
+        self.account_store
+            .insert(&mut db_txn, account_key, &account_data)?;
+        db_txn.commit()?;
+
+        let create_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let address_data = AddressData {
+            own: true,
+            account_key: Some(account_key.clone()),
+            subaddress_index: Some(next_subaddress_index),
+            create_time,
+            expiration,
+            comment,
+        };
+        let next_public_address = account_key.subaddress(next_subaddress_index);
+        log::info!(self.logger, "Inserting new address");
+        let mut db_txn = self.env.begin_rw_txn()?;
+        self.address_store
+            .insert(&mut db_txn, &next_public_address, &address_data)?;
+        db_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn add_account_with_defaults(
+        &self,
+        account_key: &AccountKey,
+        comment: String,
+    ) -> Result<(), Error> {
+        // Add default monitor data.
+        let data = MonitorData::new(
+            account_key.clone(),
+            DEFAULT_FIRST_SUBADDRESS,
+            DEFAULT_NUM_SUBADDRESSES,
+            DEFAULT_FIRST_BLOCK,
+            &comment,
+        )?;
+        let (monitor_id, _is_new) = match self.add_monitor(&data) {
+            Ok(id) => (id, true),
+            Err(Error::MonitorIdExists) => (MonitorId::from(&data), false),
+            Err(err) => {
+                return Err(err);
+            }
+        };
+        self.add_account(
+            account_key,
+            &monitor_id,
+            DEFAULT_FIRST_SUBADDRESS + 1,
+            DEFAULT_SUBADDRESS_EXPIRATION,
+            comment,
+        )?;
+        Ok(())
+    }
+
+    pub fn add_next_subaddress(
+        &self,
+        account_key: &AccountKey,
+        expiration: u64,
+        comment: String,
+    ) -> Result<(), Error> {
+        let mut db_txn = self.env.begin_rw_txn()?;
+        let active_subaddress_data = self.account_store.get(&db_txn, &account_key)?;
+        let next_subaddress = active_subaddress_data.next_subaddress_index;
+        let next_public_address = account_key.subaddress(next_subaddress);
+        let create_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let address_data = AddressData {
+            own: true,
+            account_key: Some(account_key.clone()),
+            subaddress_index: Some(next_subaddress),
+            create_time,
+            expiration,
+            comment,
+        };
+        self.address_store
+            .insert(&mut db_txn, &next_public_address, &address_data)?;
+        db_txn.commit()?;
+
+        let mut db_txn = self.env.begin_rw_txn()?;
+        self.account_store
+            .update_next_subaddress(&mut db_txn, account_key)?;
+        Ok(())
     }
 }
 

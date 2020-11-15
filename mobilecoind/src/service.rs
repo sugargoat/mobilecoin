@@ -7,7 +7,7 @@
 //! * writes matching transactions to a local DB, organized by subaddress_id
 
 use crate::{
-    database::Database,
+    database::{Database, DEFAULT_SUBADDRESS_EXPIRATION},
     error::Error,
     monitor_store::{MonitorData, MonitorId},
     payments::{Outlay, TransactionsManager, TxProposal},
@@ -197,7 +197,7 @@ impl<
 
         // Populate a new `MonitorData` instance.
         let data = MonitorData::new(
-            account_key,
+            account_key.clone(),
             request.first_subaddress,
             request.num_subaddresses,
             request.first_block,
@@ -212,6 +212,17 @@ impl<
             Err(err) => Err(err),
         }
         .map_err(|err| rpc_internal_error("mobilecoind_db.add_monitor", err, &self.logger))?;
+
+        // Update account table to include this account
+        self.mobilecoind_db
+            .add_account(
+                &account_key,
+                &id,
+                request.first_subaddress + 1,
+                DEFAULT_SUBADDRESS_EXPIRATION,
+                request.name,
+            )
+            .map_err(|err| rpc_internal_error("mobilecoind_db.add_account", err, &self.logger))?;
 
         // Return success response.
         let mut response = mc_mobilecoind_api::AddMonitorResponse::new();
@@ -1526,6 +1537,74 @@ impl<
 
         Ok(response)
     }
+
+    // ********************************************************************************
+    // API Version 2
+    // ********************************************************************************
+
+    /// Creates an address.
+    /// This convenience method does the following:
+    /// * Default: Provides the public address for the next subaddress in the active account
+    /// * If `expected_sender` provided: Includes the expected sender associated with this subaddress
+    /// * If `new_account` provided: Creates a new account and returns subaddress 0
+    fn create_address_impl(
+        &mut self,
+        request: mc_mobilecoind_api::CreateAddressRequest,
+    ) -> Result<mc_mobilecoind_api::CreateAddressResponse, RpcStatus> {
+        // Get the active account
+        let active_account = match self.mobilecoind_db.get_active_account().map_err(|err| {
+            rpc_internal_error("mobilecoind_db.get_active_account", err, &self.logger)
+        })? {
+            Some(active) => active,
+            None => {
+                return Err(rpc_internal_error(
+                    "create_address",
+                    Error::NoActiveAccount,
+                    &self.logger,
+                ));
+            }
+        };
+
+        // Check that the next subaddress is within the range
+        let monitor_id = MonitorId::try_from(&active_account.monitor_id)
+            .map_err(|err| rpc_internal_error("monitor_id.try_from", err, &self.logger))?;
+        let monitor_data = self
+            .mobilecoind_db
+            .get_monitor_data(&monitor_id)
+            .map_err(|err| {
+                rpc_internal_error("mobilecoind_db.get_monitor_data", err, &self.logger)
+            })?;
+        if active_account.next_subaddress_index
+            > monitor_data.first_subaddress + monitor_data.num_subaddresses
+        {
+            return Err(rpc_internal_error(
+                "mobilecoind_db.monitor",
+                Error::NextSubaddressOutOfRange,
+                &self.logger,
+            ));
+        }
+
+        // Get the public address for the next subaddress
+        let mut pubaddress_request = mc_mobilecoind_api::GetPublicAddressRequest::new();
+        pubaddress_request.monitor_id = active_account.monitor_id.to_vec();
+        pubaddress_request.subaddress_index = active_account.next_subaddress_index;
+        let pubaddress_resp = self.get_public_address_impl(pubaddress_request)?;
+
+        // Update the database
+        self.mobilecoind_db
+            .add_next_subaddress(
+                &monitor_data.account_key,
+                request.expiration,
+                request.comment,
+            )
+            .map_err(|err| {
+                rpc_internal_error("mobilecoind_db.update_next_subaddress", err, &self.logger)
+            })?;
+
+        let mut response = mc_mobilecoind_api::CreateAddressResponse::new();
+        response.public_address = pubaddress_resp.b58_code;
+        Ok(response)
+    }
 }
 
 macro_rules! build_api {
@@ -1583,7 +1662,8 @@ build_api! {
     get_balance GetBalanceRequest GetBalanceResponse get_balance_impl,
     send_payment SendPaymentRequest SendPaymentResponse send_payment_impl,
     pay_address_code PayAddressCodeRequest SendPaymentResponse pay_address_code_impl,
-    get_network_status Empty GetNetworkStatusResponse get_network_status_impl
+    get_network_status Empty GetNetworkStatusResponse get_network_status_impl,
+    create_address CreateAddressRequest CreateAddressResponse create_address_impl
 }
 
 #[cfg(test)]
@@ -4413,4 +4493,65 @@ mod test {
             .expect("Failed getting processed block");
         assert_eq!(response.get_tx_outs().len(), 1);
     }
+
+    // *******************************************************************************
+    // API Version 2 Tests
+    // *******************************************************************************
+
+    // Test creating an address from an active account works.
+    #[test_with_logger]
+    fn test_create_address_from_next_subaddress(logger: Logger) {
+        let mut rng: StdRng = SeedableRng::from_seed([23u8; 32]);
+
+        let (_ledger_db, _mobilecoind_db, client, _server, _server_conn_manager) =
+            get_testing_environment(3, &vec![], &vec![], logger.clone(), &mut rng);
+
+        // Need to add an account so that we have an existing account
+        // FIXME: Should we just bite the bullet and make a "create account" call?
+        let entropy_resp = client
+            .generate_entropy(&mc_mobilecoind_api::Empty::new())
+            .unwrap();
+
+        let mut account_req = mc_mobilecoind_api::GetAccountKeyRequest::new();
+        account_req.set_entropy(entropy_resp.get_entropy().to_vec());
+        let account_resp = client.get_account_key(&account_req).unwrap();
+
+        let mut monitor_req = mc_mobilecoind_api::AddMonitorRequest::new();
+        monitor_req.set_account_key(account_resp.get_account_key().clone());
+        monitor_req.set_first_subaddress(0);
+        monitor_req.set_num_subaddresses(20);
+        client.add_monitor(&monitor_req).unwrap();
+
+        // Create an address from the active account
+        let mut request = mc_mobilecoind_api::CreateAddressRequest::new();
+        request.new_account = false;
+        let _response = client
+            .create_address(&request)
+            .expect("Could not create address");
+    }
+
+    // Test creating an address with no active account fails
+    #[test_with_logger]
+    fn test_create_address_no_active_account(logger: Logger) {
+        let mut rng: StdRng = SeedableRng::from_seed([23u8; 32]);
+
+        let sender = AccountKey::random(&mut rng);
+
+        // 1 known recipient, 3 random recipients and no monitors.
+        let (_ledger_db, _mobilecoind_db, client, _server, _server_conn_manager) =
+            get_testing_environment(
+                3,
+                &vec![sender.default_subaddress()],
+                &vec![],
+                logger.clone(),
+                &mut rng,
+            );
+
+        let mut request = mc_mobilecoind_api::CreateAddressRequest::new();
+        request.new_account = false;
+        // FIXME: would love to parse the exact error - should throw NoActiveAccount
+        assert!(client.create_address(&request).is_err());
+    }
+
+    // TODO: Test creating address with "new_account"
 }

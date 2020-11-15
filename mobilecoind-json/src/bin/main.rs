@@ -641,6 +641,33 @@ fn tx_out_get_block_index_by_public_key(
     Ok(Json(JsonBlockIndexByTxPubKeyResponse::from(&resp)))
 }
 
+// *****************************************************************************
+// API Version 2
+// *****************************************************************************
+
+/// Execute an API call.
+#[post("/wallet", format = "json", data = "<request>")]
+fn wallet_action(
+    state: rocket::State<State>,
+    request: Json<JsonWalletRequest>,
+) -> Result<Json<JsonWalletResponse>, String> {
+    match request.method {
+        "create_address" => {
+            let mut req = mc_mobilecoind_api::CreateAddressRequest::new();
+            req.expiration = request.params.expiration;
+            req.comment = request.params.comment;
+            req.expected_sender = request.params.expected_sender;
+            req.new_account = request.params.new_account;
+            let resp = state
+                .mobilecoind_api_client
+                .create_address(&req)
+                .map_err(|err| format!("Failed creating request: {}", err))?;
+            Ok(Json(JsonWalletResponse::from(&resp)))
+        }
+        _ => Err("Could not parse request method".to_string()),
+    }
+}
+
 fn main() {
     mc_common::setup_panic_handler();
     let _sentry_guard = mc_common::sentry::init();
@@ -698,6 +725,7 @@ fn main() {
                 block_details,
                 processed_block,
                 tx_out_get_block_index_by_public_key,
+                wallet_action,
             ],
         )
         .manage(State {

@@ -58,6 +58,35 @@ service MobilecoindAPI {
 
     // Network status
     rpc GetNetworkStatus (google.protobuf.Empty) returns (GetNetworkStatusResponse) {}
+
+    // Wallet API Version 2
+    // As we migrate to a more user-friendly wallet API, the wallet is assumed to have the following
+    // properties:
+    //
+    // 1. A single account is the "master" account, with the master subaddress defaulted to 0
+    // 2. To track senders, you must make an additional call to register the expected sender's ID
+
+    rpc CreateAddress (CreateAddressRequest) returns (CreateAddressResponse) {}
+//    rpc ValidateAddress (ValidateAddressRequest) returns (ValidateAddressResponse) {}
+//    rpc AddrList (AddrListRequest) returns (AddrListResponse) {}
+//    rpc DeleteAddress (DeleteAddressRequest) returns (DeleteAddressResponse) {}
+//    rpc EditAddress (EditAddressRequest) returns (EditAddressResponse) {}
+//    rpc TxSend (TxSendRequest) returns (TxSendResponse) {}
+//    rpc TxSplit (TxSplitRequest) returns (TxSplitResponse) {}
+//    rpc TxDelete (TxDeleteRequest) returns (TxDeleteResponse) {}
+//    rpc TxStatus (TxStatusRequest) returns (TxStatusResponse) {}
+//    rpc TxList (TxListRequest) returns (TxListResponse) {}
+//    rpc WalletStatus (WalletStatusRequest) returns (WalletStatusResponse) {}
+//    rpc GetUtxo (GetUtxoRequest) returns (GetUtxoResponse) {}
+//    rpc GenerateTxID (GenerateTxIDRequest) returns (GenerateTxIDResponse) {}
+//    rpc ExportPaymentProof (ExportPaymentProoffRequest) returns (ExportPaymentProofResponse) {}
+//    rpc VerifyPaymentProof (VerifyPaymentProofRequest) returns (VerifyPaymentProofResponse) {}
+
+    // New calls to support the above
+    // rpc GetActiveAccount (GetActiveAccountRequest) returns (GetActiveAccountResponse) {}
+    // rpc SetActiveAccount (SetActiveAccountRequest) returns (SetActiveAccountResponse) {}
+    // rpc AccountList (AccountListRequest) returns (AccountListResponse) {}
+
 }
 
 //*********************************
@@ -693,3 +722,42 @@ message GetNetworkStatusResponse {
     // Whether we are behind.
     bool is_behind = 4;
 }
+
+//
+// API Version 2
+//
+
+// Create a new address in the wallet.
+message CreateAddressRequest {
+    // The number of seconds after which the address expires
+    uint64 expiration = 1;
+
+    // A comment associated with this address
+    string comment = 2;
+
+    // Whether to create a new account. If new_account is true, creates a new account and returns subaddress 0.
+    // Default behavior is to create a new subaddress from the active account.
+    bool new_account = 3;
+}
+
+message CreateAddressResponse {
+    // The public address for the newly created account
+    string public_address = 1;
+}
+
+
+//
+//rpc ValidateAddress (ValidateAddressRequest) returns (ValidateAddressResponse) {}
+//rpc AddrList (AddrListRequest) returns (AddrListResponse) {}
+//rpc DeleteAddress (DeleteAddressRequest) returns (DeleteAddressResponse) {}
+//rpc EditAddress (EditAddressRequest) returns (EditAddressResponse) {}
+//rpc TxSend (TxSendRequest) returns (TxSendResponse) {}
+//rpc TxSplit (TxSplitRequest) returns (TxSplitResponse) {}
+//rpc TxDelete (TxDeleteRequest) returns (TxDeleteResponse) {}
+//rpc TxStatus (TxStatusRequest) returns (TxStatusResponse) {}
+//rpc TxList (TxListRequest) returns (TxListResponse) {}
+//rpc WalletStatus (WalletStatusRequest) returns (WalletStatusResponse) {}
+//rpc GetUtxo (GetUtxoRequest) returns (GetUtxoResponse) {}
+//rpc GenerateTxID (GenerateTxIDRequest) returns (GenerateTxIDResponse) {}
+//rpc ExportPaymentProof (ExportPaymentProoffRequest) returns (ExportPaymentProofResponse) {}
+//rpc VerifyPaymentProof (VerifyPaymentProofRequest) returns (VerifyPaymentProofResponse) {}
