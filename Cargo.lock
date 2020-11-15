@@ -3041,6 +3041,7 @@ dependencies = [
 name = "mc-mobilecoind-json"
 version = "1.0.0"
 dependencies = [
+ "displaydoc",
  "grpcio",
  "hex 0.4.2",
  "mc-api",

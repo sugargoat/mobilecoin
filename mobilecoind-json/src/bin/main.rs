@@ -3,17 +3,18 @@
 //! JSON wrapper for the mobilecoind API.
 
 #![feature(proc_macro_hygiene, decl_macro)]
-
 use grpcio::ChannelBuilder;
 use mc_api::external::{CompressedRistretto, KeyImage, PublicAddress, RistrettoPrivate};
 use mc_common::logger::{create_app_logger, log, o};
 use mc_mobilecoind_api::{mobilecoind_api_grpc::MobilecoindApiClient, MobilecoindUri};
-use mc_mobilecoind_json::data_types::*;
+use mc_mobilecoind_json::{create_account, create_address, data_types::*, State};
 use mc_util_grpc::ConnectionUriGrpcioChannel;
 use protobuf::RepeatedField;
 use rocket::{delete, get, post, routes};
-use rocket_contrib::json::{Json, JsonValue};
-use serde_json::json;
+use rocket_contrib::{
+    json,
+    json::{Json, JsonValue},
+};
 use std::{convert::TryFrom, sync::Arc};
 use structopt::StructOpt;
 
@@ -33,11 +34,6 @@ pub struct APIConfig {
     /// MobileCoinD URI.
     #[structopt(long, default_value = "insecure-mobilecoind://127.0.0.1/")]
     pub mobilecoind_uri: MobilecoindUri,
-}
-
-/// Connection to the mobilecoind client
-struct State {
-    pub mobilecoind_api_client: MobilecoindApiClient,
 }
 
 /// Requests a new root entropy from mobilecoind
@@ -653,23 +649,13 @@ fn wallet_action(
     request: JsonWalletRequest,
 ) -> Result<JsonValue, String> {
     match request.method.as_str() {
-        "create_address" => {
-            let mut req = mc_mobilecoind_api::CreateAddressRequest::new();
-            req.expiration = request.params["expiration"]
-                .to_string()
-                .parse::<u64>()
-                .map_err(|_| "Could not parse u64")?;
-            req.comment = request.params["comment"].to_string();
-            req.account_id = hex::decode(request.params["account_id"].to_string())
-                .map_err(|_| "Could not decode hex")?;
-            let resp = state
-                .mobilecoind_api_client
-                .create_address(&req)
-                .map_err(|err| format!("Failed creating request: {}", err))?;
-            // FIXME: why doesn't it find protobuf::json??
-            Ok(json!(protobuf::text_format::print_to_string(&resp)).into())
+        "create_account" => {
+            create_account(request.params, state).or_else(|e| Err(format!("{}", e)))
         }
-        _ => Err("Could not parse request method".to_string()),
+        "create_address" => {
+            create_address(request.params, state).or_else(|e| Err(format!("{}", e)))
+        }
+        _ => Err(format!("Could not parse request method {:?}", request.method).to_string()),
     }
 }
 
@@ -782,7 +768,6 @@ mod tests {
             .dispatch();
         assert_eq!(res.status(), Status::Ok);
         let body = res.body().unwrap().into_string().unwrap();
-        log::info!(logger, "Attempted dispatch got response {:?}", body);
         let res_json: JsonValue = serde_json::from_str(&body).unwrap();
         assert!(res_json.get("entropy").is_some());
     }
@@ -798,6 +783,36 @@ mod tests {
         });
 
         let body = json!({
+        "method": "create_account",
+        "params": {
+             "comment": "Alice Main Account",
+            }
+        });
+        let mut res = client
+            .post("/wallet")
+            .header(ContentType::JSON)
+            .body(body.to_string())
+            .dispatch();
+        assert_eq!(res.status(), Status::Ok);
+        let body = res.body().unwrap().into_string().unwrap();
+        log::info!(logger, "Attempted dispatch got response {:?}", body);
+        let res_json: JsonValue = serde_json::from_str(&body).unwrap();
+        assert!(res_json.get("public_address").is_some());
+    }
+
+    #[test_with_logger]
+    fn test_create_address(logger: Logger) {
+        let mut rng: StdRng = SeedableRng::from_seed([20u8; 32]);
+        // 3 random recipients and no monitors.
+        let (_ledger_db, _mobilecoind_db, mobilecoind_api_client, _server, _server_conn_manager) =
+            get_testing_environment(3, &vec![], &vec![], logger.clone(), &mut rng);
+        let client = setup(State {
+            mobilecoind_api_client,
+        });
+
+        // Must create an account first
+
+        let body = json!({
         "method": "create_address",
         "params": {
             "expiration": 0,
@@ -810,8 +825,10 @@ mod tests {
             .header(ContentType::JSON)
             .body(body.to_string())
             .dispatch();
+        assert_eq!(res.status(), Status::Ok);
         let body = res.body().unwrap().into_string().unwrap();
         log::info!(logger, "Attempted dispatch got response {:?}", body);
-        assert_eq!(res.status(), Status::Ok);
+        let res_json: JsonValue = serde_json::from_str(&body).unwrap();
+        assert!(res_json.get("public_address").is_some())
     }
 }

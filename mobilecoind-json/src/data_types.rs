@@ -1165,48 +1165,15 @@ impl FromDataSimple for JsonWalletRequest {
                 format!("Internal failure {:?}", e),
             ));
         }
-        let json_value: JsonValue = serde_json::from_str(&data_string).unwrap();
+        // FIXME: no unwraps
+        let serde_value: serde_json::Value = serde_json::from_str(&data_string).unwrap();
+        let json_value: JsonValue = serde_value.into();
         Success(Self {
             method: json_value["method"].to_string(),
             params: json_value["params"].clone().into(),
         })
     }
 }
-
-/*
-impl TryFrom<&JsonValue> for mc_mobilecoind_api::CreateAddressRequest {
-    type Error = String;
-
-    fn try_from(src: &JsonValue) -> Result<mc_mobilecoind_api::CreateAddressRequest, String> {
-        let mut key_image = KeyImage::new();
-        key_image.set_data(
-            hex::decode(&src.key_image)
-                .map_err(|err| format!("Failed to decode key image hex: {}", err))?,
-        );
-
-        // Reconstruct the public address as a protobuf
-        let mut utxo = mc_mobilecoind_api::UnspentTxOut::new();
-        utxo.set_tx_out(
-            mc_api::external::TxOut::try_from(&src.tx_out)
-                .map_err(|err| format!("Failed to get TxOut: {}", err))?,
-        );
-        utxo.set_subaddress_index(src.subaddress_index);
-        utxo.set_key_image(key_image);
-        utxo.set_value(
-            src.value
-                .parse::<u64>()
-                .map_err(|err| format!("Failed to parse u64 from value: {}", err))?,
-        );
-        utxo.set_attempted_spend_height(src.attempted_spend_height);
-        utxo.set_attempted_spend_tombstone(src.attempted_spend_tombstone);
-        utxo.set_monitor_id(
-            hex::decode(&src.monitor_id)
-                .map_err(|err| format!("Failed to decode monitor id hex: {}", err))?,
-        );
-
-        Ok(utxo)
-    }
-}*/
 
 #[cfg(test)]
 mod test {
