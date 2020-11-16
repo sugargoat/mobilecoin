@@ -11,9 +11,10 @@ pub struct State {
 
 // mobilecoind-json API Version 2
 
+use data_types::*;
 use displaydoc::Display;
 use mc_mobilecoind_api::mobilecoind_api_grpc::MobilecoindApiClient;
-use rocket_contrib::{json, json::JsonValue};
+use rocket_contrib::json::Json;
 
 #[derive(Display)]
 pub enum APIError {
@@ -45,26 +46,49 @@ impl From<grpcio::Error> for APIError {
     }
 }
 
+// pub fn create_account(
+//     params: JsonValue,
+//     state: rocket::State<State>,
+// ) -> Result<JsonValue, APIError> {
+//     let mut req = mc_mobilecoind_api::CreateAccountRequest::new();
+//     req.comment = params["comment"].to_string();
+//
+//     let resp = state.mobilecoind_api_client.create_account(&req)?;
+//     Ok(json!(protobuf::text_format::print_to_string(&resp)).into())
+// }
+//
+// pub fn create_address(
+//     params: JsonValue,
+//     state: rocket::State<State>,
+// ) -> Result<JsonValue, APIError> {
+//     let mut req = mc_mobilecoind_api::CreateAddressRequest::new();
+//     req.expiration = params["expiration"].to_string().parse::<u64>()?;
+//     req.comment = params["comment"].to_string();
+//     req.account_id = hex::decode(params["account_id"].to_string())?;
+//     let resp = state.mobilecoind_api_client.create_address(&req)?;
+//     // FIXME: why doesn't it find protobuf::json??
+//     Ok(json!(protobuf::text_format::print_to_string(&resp)).into())
+// }
+
 pub fn create_account(
-    params: JsonValue,
+    params: &WalletCreateAccountParams,
     state: rocket::State<State>,
-) -> Result<JsonValue, APIError> {
+) -> Result<Json<WalletCreateAccountResponse>, APIError> {
     let mut req = mc_mobilecoind_api::CreateAccountRequest::new();
-    req.comment = params["comment"].to_string();
+    req.comment = params.comment.clone();
 
     let resp = state.mobilecoind_api_client.create_account(&req)?;
-    Ok(json!(protobuf::text_format::print_to_string(&resp)).into())
+    Ok(Json(WalletCreateAccountResponse::from(&resp)))
 }
 
 pub fn create_address(
-    params: JsonValue,
+    params: &WalletCreateAddressParams,
     state: rocket::State<State>,
-) -> Result<JsonValue, APIError> {
+) -> Result<Json<WalletCreateAddressResponse>, APIError> {
     let mut req = mc_mobilecoind_api::CreateAddressRequest::new();
-    req.expiration = params["expiration"].to_string().parse::<u64>()?;
-    req.comment = params["comment"].to_string();
-    req.account_id = hex::decode(params["account_id"].to_string())?;
+    req.expiration = params.expiration.parse::<u64>()?;
+    req.comment = params.comment.clone();
+    req.account_id = hex::decode(params.account_id.clone())?;
     let resp = state.mobilecoind_api_client.create_address(&req)?;
-    // FIXME: why doesn't it find protobuf::json??
-    Ok(json!(protobuf::text_format::print_to_string(&resp)).into())
+    Ok(Json(WalletCreateAddressResponse::from(&resp)))
 }

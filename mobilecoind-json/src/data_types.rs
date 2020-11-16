@@ -8,16 +8,16 @@ use mc_api::external::{
     TxOutMembershipProof, TxPrefix,
 };
 use protobuf::RepeatedField;
-use rocket::{
-    data::{FromDataSimple, Outcome},
-    http::Status,
-    Data,
-    Outcome::*,
-    Request,
-};
-use rocket_contrib::json::JsonValue;
+// use rocket::{
+//     data::{FromDataSimple, Outcome},
+//     http::Status,
+//     Data,
+//     Outcome::*,
+//     Request,
+// };
+// use rocket_contrib::json::JsonValue;
 use serde_derive::{Deserialize, Serialize};
-use std::{collections::HashMap, convert::TryFrom, io::Read, iter::FromIterator};
+use std::{collections::HashMap, convert::TryFrom, iter::FromIterator};
 
 #[derive(Serialize, Default)]
 pub struct JsonEntropyResponse {
@@ -1146,32 +1146,100 @@ impl From<&mc_mobilecoind_api::GetBlockIndexByTxPubKeyResponse>
 // ************************************************************************************
 
 // Limit to prevent DoS attacks.
-const LIMIT: u64 = 256;
+// const LIMIT: u64 = 256;
+//
+// #[derive(Deserialize, Serialize, Default)]
+// pub struct JsonWalletRequest {
+//     pub method: String,
+//     pub params: JsonValue,
+// }
+// //
+// // // FIXME: I just want to use the Json FromData, but I have nested json that I want to be
+// // // arbitrary.
+// impl FromDataSimple for JsonWalletRequest {
+//     type Error = String;
+//
+//     fn from_data(_req: &Request, data: Data) -> Outcome<Self, String> {
+//         let mut data_string = String::new();
+//         if let Err(e) = data.open().take(LIMIT).read_to_string(&mut data_string) {
+//             return Failure((
+//                 Status::InternalServerError,
+//                 format!("Internal failure {:?}", e),
+//             ));
+//         }
+//
+//         match serde_json::from_str(&data_string) {
+//             Ok(v) => Success(Self {
+//                 method: v["method"].to_string(),
+//                 params: v["params"].clone().into(),
+//             }),
+//             Err(e) => Failure((
+//                 Status::InternalServerError,
+//                 "Could not parse json data".to_string(),
+//             )),
+//         }
+//     }
+// }
 
-#[derive(Serialize, Default)]
-pub struct JsonWalletRequest {
+//
+// CreateAccount
+//
+
+#[derive(Deserialize, Default)]
+pub struct WalletCreateAccountRequest {
     pub method: String,
-    pub params: JsonValue,
+    pub params: WalletCreateAccountParams,
 }
 
-impl FromDataSimple for JsonWalletRequest {
-    type Error = String;
+#[derive(Deserialize, Serialize, Default)]
+pub struct WalletCreateAccountParams {
+    pub comment: String,
+}
 
-    fn from_data(_req: &Request, data: Data) -> Outcome<Self, String> {
-        let mut data_string = String::new();
-        if let Err(e) = data.open().take(LIMIT).read_to_string(&mut data_string) {
-            return Failure((
-                Status::InternalServerError,
-                format!("Internal failure {:?}", e),
-            ));
+#[derive(Serialize, Default)]
+pub struct WalletCreateAccountResponse {
+    pub public_address: String,
+    pub entropy: String,
+    pub account_id: String,
+}
+
+impl From<&mc_mobilecoind_api::CreateAccountResponse> for WalletCreateAccountResponse {
+    fn from(src: &mc_mobilecoind_api::CreateAccountResponse) -> Self {
+        Self {
+            public_address: src.public_address.to_string(),
+            entropy: hex::encode(src.entropy.clone()),
+            account_id: hex::encode(src.account_id.clone()),
         }
-        // FIXME: no unwraps
-        let serde_value: serde_json::Value = serde_json::from_str(&data_string).unwrap();
-        let json_value: JsonValue = serde_value.into();
-        Success(Self {
-            method: json_value["method"].to_string(),
-            params: json_value["params"].clone().into(),
-        })
+    }
+}
+
+//
+// CreateAddress
+//
+
+#[derive(Deserialize, Default)]
+pub struct WalletCreateAddressRequest {
+    pub method: String,
+    pub params: WalletCreateAddressParams,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+pub struct WalletCreateAddressParams {
+    pub account_id: String,
+    pub expiration: String,
+    pub comment: String,
+}
+
+#[derive(Serialize, Default)]
+pub struct WalletCreateAddressResponse {
+    pub public_address: String,
+}
+
+impl From<&mc_mobilecoind_api::CreateAddressResponse> for WalletCreateAddressResponse {
+    fn from(src: &mc_mobilecoind_api::CreateAddressResponse) -> Self {
+        Self {
+            public_address: src.public_address.to_string(),
+        }
     }
 }
 

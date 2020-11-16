@@ -642,22 +642,38 @@ fn tx_out_get_block_index_by_public_key(
 // API Version 2
 // *****************************************************************************
 
-/// Execute an API call.
-#[post("/wallet", format = "json", data = "<request>")]
-fn wallet_action(
+#[post("/wallet/create-account", format = "json", data = "<request>")]
+fn wallet_create_account(
     state: rocket::State<State>,
-    request: JsonWalletRequest,
-) -> Result<JsonValue, String> {
-    match request.method.as_str() {
-        "create_account" => {
-            create_account(request.params, state).or_else(|e| Err(format!("{}", e)))
-        }
-        "create_address" => {
-            create_address(request.params, state).or_else(|e| Err(format!("{}", e)))
-        }
-        _ => Err(format!("Could not parse request method {:?}", request.method).to_string()),
-    }
+    request: Json<WalletCreateAccountRequest>,
+) -> Result<Json<WalletCreateAccountResponse>, String> {
+    create_account(&request.params, state).or_else(|e| Err(format!("{}", e)))
 }
+
+#[post("/wallet/create-address", format = "json", data = "<request>")]
+fn wallet_create_address(
+    state: rocket::State<State>,
+    request: Json<WalletCreateAddressRequest>,
+) -> Result<Json<WalletCreateAddressResponse>, String> {
+    create_address(&request.params, state).or_else(|e| Err(format!("{}", e)))
+}
+
+/// Execute an API call
+// #[post("/wallet", format = "json", data = "<request>")]
+// fn wallet_action(
+//     state: rocket::State<State>,
+//     request: JsonWalletRequest,
+// ) -> Result<JsonValue, String> {
+//     match request.method.as_str() {
+//         "create_account" => {
+//             create_account(request.params, state).or_else(|e| Err(format!("{}", e)))
+//         }
+//         "create_address" => {
+//             create_address(request.params, state).or_else(|e| Err(format!("{}", e)))
+//         }
+//         _ => Err(format!("Could not parse request method {:?}", request.method).to_string()),
+//     }
+// }
 
 fn rocket(rocket_config: rocket::Config, state: State) -> rocket::Rocket {
     rocket::custom(rocket_config)
@@ -688,7 +704,9 @@ fn rocket(rocket_config: rocket::Config, state: State) -> rocket::Rocket {
                 block_details,
                 processed_block,
                 tx_out_get_block_index_by_public_key,
-                wallet_action,
+                // wallet_action,
+                wallet_create_account,
+                wallet_create_address,
             ],
         )
         .manage(state)
@@ -789,7 +807,7 @@ mod tests {
             }
         });
         let mut res = client
-            .post("/wallet")
+            .post("/wallet/create-account")
             .header(ContentType::JSON)
             .body(body.to_string())
             .dispatch();
@@ -798,6 +816,8 @@ mod tests {
         log::info!(logger, "Attempted dispatch got response {:?}", body);
         let res_json: JsonValue = serde_json::from_str(&body).unwrap();
         assert!(res_json.get("public_address").is_some());
+        assert!(res_json.get("entropy").is_some());
+        assert!(res_json.get("account_id").is_some());
     }
 
     #[test_with_logger]
@@ -811,17 +831,32 @@ mod tests {
         });
 
         // Must create an account first
+        let body = json!({
+        "method": "create_account",
+        "params": {
+             "comment": "Alice Main Account",
+            }
+        });
+        let mut res = client
+            .post("/wallet/create-account")
+            .header(ContentType::JSON)
+            .body(body.to_string())
+            .dispatch();
+        assert_eq!(res.status(), Status::Ok);
+        let body = res.body().unwrap().into_string().unwrap();
+        let res_json: JsonValue = serde_json::from_str(&body).unwrap();
 
+        // Then can add an address
         let body = json!({
         "method": "create_address",
         "params": {
-            "expiration": 0,
-             "comment": "Alice",
-             "account_id": ""
+            "expiration": "0",
+             "comment": "Bob will send to this subaddress",
+             "account_id": res_json.get("account_id")
         }
         });
         let mut res = client
-            .post("/wallet")
+            .post("/wallet/create-address")
             .header(ContentType::JSON)
             .body(body.to_string())
             .dispatch();
