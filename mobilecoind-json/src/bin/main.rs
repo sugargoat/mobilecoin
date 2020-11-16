@@ -850,7 +850,6 @@ mod tests {
         let body = json!({
         "method": "create_address",
         "params": {
-            "expiration": "0",
              "comment": "Bob will send to this subaddress",
              "account_id": res_json.get("account_id")
         }

@@ -8,14 +8,6 @@ use mc_api::external::{
     TxOutMembershipProof, TxPrefix,
 };
 use protobuf::RepeatedField;
-// use rocket::{
-//     data::{FromDataSimple, Outcome},
-//     http::Status,
-//     Data,
-//     Outcome::*,
-//     Request,
-// };
-// use rocket_contrib::json::JsonValue;
 use serde_derive::{Deserialize, Serialize};
 use std::{collections::HashMap, convert::TryFrom, iter::FromIterator};
 
@@ -1145,42 +1137,6 @@ impl From<&mc_mobilecoind_api::GetBlockIndexByTxPubKeyResponse>
 // mobilecoind-json API Version 2
 // ************************************************************************************
 
-// Limit to prevent DoS attacks.
-// const LIMIT: u64 = 256;
-//
-// #[derive(Deserialize, Serialize, Default)]
-// pub struct JsonWalletRequest {
-//     pub method: String,
-//     pub params: JsonValue,
-// }
-// //
-// // // FIXME: I just want to use the Json FromData, but I have nested json that I want to be
-// // // arbitrary.
-// impl FromDataSimple for JsonWalletRequest {
-//     type Error = String;
-//
-//     fn from_data(_req: &Request, data: Data) -> Outcome<Self, String> {
-//         let mut data_string = String::new();
-//         if let Err(e) = data.open().take(LIMIT).read_to_string(&mut data_string) {
-//             return Failure((
-//                 Status::InternalServerError,
-//                 format!("Internal failure {:?}", e),
-//             ));
-//         }
-//
-//         match serde_json::from_str(&data_string) {
-//             Ok(v) => Success(Self {
-//                 method: v["method"].to_string(),
-//                 params: v["params"].clone().into(),
-//             }),
-//             Err(e) => Failure((
-//                 Status::InternalServerError,
-//                 "Could not parse json data".to_string(),
-//             )),
-//         }
-//     }
-// }
-
 //
 // CreateAccount
 //
@@ -1226,7 +1182,6 @@ pub struct WalletCreateAddressRequest {
 #[derive(Deserialize, Serialize, Default)]
 pub struct WalletCreateAddressParams {
     pub account_id: String,
-    pub expiration: String,
     pub comment: String,
 }
 

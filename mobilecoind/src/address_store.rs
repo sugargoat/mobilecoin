@@ -41,11 +41,6 @@ pub struct AddressData {
     #[prost(uint64, tag = "4")]
     pub create_time: u64,
 
-    /// The duration after create_time at which this address is expired.
-    /// In seconds. Setting expiration to 0 means never expire.
-    #[prost(uint64, tag = "5")]
-    pub expiration: u64,
-
     /// Comment associated with this public address.
     #[prost(string, tag = "6")]
     pub comment: String,
@@ -193,7 +188,6 @@ mod test {
                 account_key: Some(monitor_data.account_key.clone()),
                 subaddress_index: Some(0),
                 create_time: 55555,
-                expiration: 0,
                 comment: "Alice".to_string(),
             };
             address_store

@@ -7,7 +7,7 @@
 //! * writes matching transactions to a local DB, organized by subaddress_id
 
 use crate::{
-    database::{Database, DEFAULT_SUBADDRESS_EXPIRATION},
+    database::Database,
     error::Error,
     monitor_store::{MonitorData, MonitorId},
     payments::{Outlay, TransactionsManager, TxProposal},
@@ -214,12 +214,13 @@ impl<
         .map_err(|err| rpc_internal_error("mobilecoind_db.add_monitor", err, &self.logger))?;
 
         // Update account table to include this account
+        let change_subaddress = request.first_subaddress + 1;
         self.mobilecoind_db
             .add_account(
                 &account_key,
                 &id,
-                request.first_subaddress + 1,
-                DEFAULT_SUBADDRESS_EXPIRATION,
+                change_subaddress + 1,
+                change_subaddress,
                 request.name,
             )
             .map_err(|err| rpc_internal_error("mobilecoind_db.add_account", err, &self.logger))?;
@@ -1622,11 +1623,7 @@ impl<
 
         // Update the database
         self.mobilecoind_db
-            .add_next_subaddress(
-                &monitor_data.account_key,
-                request.expiration,
-                request.comment,
-            )
+            .add_next_subaddress(&monitor_data.account_key, request.comment)
             .map_err(|err| {
                 rpc_internal_error("mobilecoind_db.update_next_subaddress", err, &self.logger)
             })?;
@@ -4574,7 +4571,6 @@ mod test {
         // Create an address from the active account
         let mut request = mc_mobilecoind_api::CreateAddressRequest::new();
         request.account_id = monitor_resp.monitor_id;
-        request.expiration = 0;
         request.comment = "Alice".to_string();
         let _response = client
             .create_address(&request)

@@ -34,7 +34,7 @@ const MAX_LMDB_FILE_SIZE: usize = 1_099_511_627_776; // 1 TB
 const DEFAULT_NUM_SUBADDRESSES: u64 = 100; // FIXME: what is optimal? 151s to add 10000, 18s to add 1000, 5s to add 100,
 const DEFAULT_FIRST_SUBADDRESS: u64 = 0;
 const DEFAULT_FIRST_BLOCK: u64 = 0;
-pub const DEFAULT_SUBADDRESS_EXPIRATION: u64 = 0; // Never expire
+const DEFAULT_CHANGE_SUBADDRESS: u64 = 1;
 
 /// Metadata store settings that are used for version control.
 #[derive(Clone, Default, Debug)]
@@ -327,22 +327,18 @@ impl Database {
             .get_processed_block(&db_txn, monitor_id, block_num)
     }
 
-    pub fn get_active_account(&self) -> Result<Option<AccountData>, Error> {
-        let db_txn = self.env.begin_ro_txn()?;
-        Ok(self.account_store.get_active(&db_txn)?)
-    }
-
     pub fn add_account(
         &self,
         account_key: &AccountKey,
         monitor_id: &MonitorId,
         next_subaddress_index: u64,
-        expiration: u64,
+        change_subaddress: u64,
         comment: String,
     ) -> Result<(), Error> {
         let account_data = AccountData {
             monitor_id: monitor_id.to_vec(),
             next_subaddress_index,
+            change_subaddress,
         };
         let mut db_txn = self.env.begin_rw_txn()?;
         self.account_store
@@ -355,7 +351,6 @@ impl Database {
             account_key: Some(account_key.clone()),
             subaddress_index: Some(next_subaddress_index),
             create_time,
-            expiration,
             comment,
         };
         let next_public_address = account_key.subaddress(next_subaddress_index);
@@ -389,8 +384,8 @@ impl Database {
         self.add_account(
             account_key,
             &monitor_id,
-            DEFAULT_FIRST_SUBADDRESS + 1,
-            DEFAULT_SUBADDRESS_EXPIRATION,
+            DEFAULT_CHANGE_SUBADDRESS + 1,
+            DEFAULT_CHANGE_SUBADDRESS,
             comment,
         )?;
         Ok(monitor_id)
@@ -399,7 +394,6 @@ impl Database {
     pub fn add_next_subaddress(
         &self,
         account_key: &AccountKey,
-        expiration: u64,
         comment: String,
     ) -> Result<(), Error> {
         let mut db_txn = self.env.begin_rw_txn()?;
@@ -412,7 +406,6 @@ impl Database {
             account_key: Some(account_key.clone()),
             subaddress_index: Some(next_subaddress),
             create_time,
-            expiration,
             comment,
         };
         self.address_store
