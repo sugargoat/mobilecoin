@@ -12,6 +12,7 @@ use crate::{
     monitor_store::{MonitorData, MonitorId},
     payments::{Outlay, TransactionsManager, TxProposal},
     sync::SyncThread,
+    transaction_history_store::{TransactionData, TxStatus},
     utxo_store::{UnspentTxOut, UtxoId},
 };
 use grpcio::{EnvBuilder, RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, UnarySink};
@@ -44,6 +45,7 @@ use protobuf::{ProtobufEnum, RepeatedField};
 use std::{
     convert::TryFrom,
     sync::{Arc, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 pub struct Service {
@@ -1590,17 +1592,10 @@ impl<
     ) -> Result<mc_mobilecoind_api::CreateAddressResponse, RpcStatus> {
         let monitor_id = MonitorId::try_from(request.get_account_id())
             .map_err(|err| rpc_internal_error("MonitorId::try_from", err, &self.logger))?;
-
-        let monitor_data = self
-            .mobilecoind_db
-            .get_monitor_data(&monitor_id)
-            .map_err(|err| {
-                rpc_internal_error("mobilecoind_db.get_monitor_data", err, &self.logger)
-            })?;
         // Get the next subaddress index for this account
         let account_data = self
             .mobilecoind_db
-            .get_account_data(&monitor_data.account_key)
+            .get_account_data(&monitor_id)
             .map_err(|err| {
                 rpc_internal_error("mobilecoind_db.get_account_data", err, &self.logger)
             })?;
@@ -1647,6 +1642,105 @@ impl<
             .map_err(|err| rpc_internal_error("get_public_address", err, &self.logger))?;
         let mut response = mc_mobilecoind_api::GetAddressResponse::new();
         response.set_public_address(resp.get_b58_code().to_string());
+        Ok(response)
+    }
+
+    /// Sends a transaction and stores relevant details in the transaction history.
+    fn tx_send_impl(
+        &mut self,
+        request: mc_mobilecoind_api::TxSendRequest,
+    ) -> Result<mc_mobilecoind_api::TxSendResponse, RpcStatus> {
+        let monitor_id = MonitorId::try_from(request.get_account_id())
+            .map_err(|err| rpc_internal_error("MonitorId::try_from", err, &self.logger))?;
+        // Get the next subaddress index for this account
+        let account_data = self
+            .mobilecoind_db
+            .get_account_data(&monitor_id)
+            .map_err(|err| {
+                rpc_internal_error("mobilecoind_db.get_account_data", err, &self.logger)
+            })?;
+
+        // Get all utxos for this monitor id (multiple subaddresses). FIXME: could also optimize for dust.
+        let mut utxos = self
+            .mobilecoind_db
+            .get_utxos_for_account(&sender_monitor_id)
+            .map_err(|err| {
+                rpc_internal_error("mobilecoind_db.get_utxos_for_account", err, &self.logger)
+            })?;
+
+        // Optionally filter for max value.
+        if request.max_input_utxo_value > 0 {
+            utxos.retain(|utxo| utxo.value <= request.max_input_utxo_value);
+        }
+
+        // Parse the receiver
+        let mut parse_address_code_request = mc_mobilecoind_api::ParseAddressCodeRequest::new();
+        parse_address_code_request.set_b58_code(request.get_public_address().to_owned());
+        let parse_address_code_response =
+            self.parse_address_code_impl(parse_address_code_request)?;
+
+        // Create outlay
+        let mut outlay = mc_mobilecoind_api::Outlay::new();
+        outlay.set_value(request.get_value());
+        outlay.set_receiver(parse_address_code_response.get_receiver().clone());
+
+        let mut pay_req = mc_mobilecoind_api::GenerateTxRequest::new();
+        pay_req.sender_monitor_id = request.account_id;
+        pay_req.change_subaddress = account_data.change_subaddress;
+        pay_req.input_list = RepeatedField::from_vec(utxos);
+        pay_req.outlay_list = RepeatedField::from_vec(vec![outlay]);
+        pay_req.fee = request.fee;
+        pay_req.tombstone = 0;
+
+        let resp = self
+            .generate_tx_impl(pay_req)
+            .map_err(|err| rpc_internal_error("generate_tx", err, &self.logger))?;
+
+        // Insert all the details into the transaction store
+        let output_ids: Vec<UtxoId> = resp
+            .tx_proposal
+            .get_tx()
+            .get_prefix()
+            .get_outputs()
+            .iter()
+            .map(|utxo| {
+                let unspent = UnspentTxOut::try_from(proto_utxo).map_err(|err| {
+                    rpc_internal_error("unspent_tx_out.try_from", err, &self.logger)
+                })?;
+                UtxoId::from(unspent)
+            })
+            .collect();
+
+        let network_status_request = mc_mobilecoind_api::Empty::new();
+        let resp = self
+            .get_network_status_impl(network_status_request)
+            .map_err(|err| rpc_internal_error("get_network_status", err, &self.logger))?;
+
+        let height = resp.network_highest_block_index;
+        let create_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let transaction_data = TransactionData {
+            transaction_outputs: output_ids,
+            change_index: tx_proposal.change_index,
+            sender_account: Some(request.account_id),
+            sender_alias: None,
+            receiver: request.public_address,
+            change_receiver: account_data.change_subaddress,
+            value: request.value,
+            fee: request.fee,
+            status: TxStatus::Pending,
+            create_time,
+            comment: request.comment,
+            height,
+        };
+        let tx_id = tx_proposal.get_tx().get_hash();
+        self.mobilecoind_db
+            .add_transaction_data(tx_id, transaction_data)
+            .map_err(|err| {
+                rpc_internal_error("mobilecoind_db.add_transaction_data", err, &self.logger)
+            })?;
+
+        let mut response = mc_mobilecoind_api::TxSendResponse::new();
+        response.tx_id = tx_id;
         Ok(response)
     }
 }
@@ -4592,4 +4686,56 @@ mod test {
             .create_account(&request)
             .expect("Could not create new account with defaults");
     }
+
+    #[test_with_logger]
+    fn test_tx_send(logger: Logger) {
+        let mut rng: StdRng = SeedableRng::from_seed([23u8; 32]);
+
+        let sender = AccountKey::random(&mut rng);
+        let data = MonitorData::new(
+            sender.clone(),
+            0,  // first_subaddress
+            20, // num_subaddresses
+            0,  // first_block
+            "", // name
+        )
+        .unwrap();
+
+        // 1 known recipient, 3 random recipients and no monitors.
+        let (ledger_db, mobilecoind_db, client, _server, _server_conn_manager) =
+            get_testing_environment(
+                3,
+                &vec![sender.default_subaddress()],
+                &vec![],
+                logger.clone(),
+                &mut rng,
+            );
+
+        // Insert into database.
+        let monitor_id = mobilecoind_db.add_monitor(&data).unwrap();
+
+        // Allow the new monitor to process the ledger.
+        wait_for_monitors(&mobilecoind_db, &ledger_db, &logger);
+
+        let receiver = AccountKey::random(&mut rng);
+        let receiver_address = receiver.subaddress(4);
+        let mut pubaddr_req = mc_mobilecoind_api::CreateAddressCodeRrequest::new();
+        pubaddr_req.set_receiver(receiver_address);
+        let addr_resp = client
+            .create_address_code(&pubaddr_req)
+            .expect("Could not get public address");
+
+        //
+        let mut request = mc_mobilecoind_api::TxSendRequest::new();
+        request.set_account_id(monitor_id);
+        request.set_public_address(addr_resp.get_b58_code());
+        request.set_value(100);
+        request.set_fee(0);
+        request.set_comment("Pay Alice");
+        let _resp = client
+            .create_account(&request)
+            .expect("Could not create new account with defaults");
+    }
+
+    // FIXME: test TxSend from specified coins
 }

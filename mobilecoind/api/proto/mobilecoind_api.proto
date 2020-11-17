@@ -73,7 +73,7 @@ service MobilecoindAPI {
 //    rpc AddrList (AddrListRequest) returns (AddrListResponse) {}
 //    rpc DeleteAddress (DeleteAddressRequest) returns (DeleteAddressResponse) {}
 //    rpc EditAddress (EditAddressRequest) returns (EditAddressResponse) {}
-//    rpc TxSend (TxSendRequest) returns (TxSendResponse) {}
+    rpc TxSend (TxSendRequest) returns (TxSendResponse) {}
 //    rpc TxSplit (TxSplitRequest) returns (TxSplitResponse) {}
 //    rpc TxDelete (TxDeleteRequest) returns (TxDeleteResponse) {}
 //    rpc TxStatus (TxStatusRequest) returns (TxStatusResponse) {}
@@ -170,6 +170,9 @@ message TxProposal {
     /// A list of the confirmation numbers, in the same order
     /// as the outlays.
     repeated bytes outlay_confirmation_numbers = 6;
+
+    /// The index of the change in the Tx object outputs.
+    uint32 change_index = 7;
 }
 
 // Structure used to check transaction status as a Sender.
@@ -751,11 +754,8 @@ message CreateAddressRequest {
     // The account id for which to create an address.
     bytes account_id = 1;
 
-    // The number of seconds after which the address expires
-    uint64 expiration = 2;
-
     // A comment associated with this address
-    string comment = 3;
+    string comment = 2;
 }
 
 message CreateAddressResponse {
@@ -771,6 +771,30 @@ message GetAddressRequest {
 
 message GetAddressResponse {
     string public_address = 1;
+}
+
+message TxSendRequest {
+    // The account from which to send funds
+    bytes account_id = 1;
+
+    // The address of the recipient
+    string public_address = 2;
+
+    // The value to send
+    uint64 value = 3;
+
+    // The fee for the transaction
+    uint64 fee = 4;
+
+    // A comment for the transaction history record
+    string comment = 5;
+
+    // Optional: The specific UTXOs to spend for this transaction
+    repeated bytes coins = 6;
+}
+
+message TxSendResponse {
+    bytes tx_id = 1;
 }
 
 

@@ -68,6 +68,9 @@ pub struct TxProposal {
     /// A list of the confirmation numbers, in the same order
     /// as the outlays.
     pub outlay_confirmation_numbers: Vec<TxOutConfirmationNumber>,
+
+    /// The index of the change in the Tx object's outputs.
+    pub change_index: Option<usize>,
 }
 
 impl TxProposal {
@@ -783,6 +786,7 @@ impl<T: UserTxConnection + 'static, FPR: FogPubkeyResolver + Send + Sync + 'stat
         let change = input_value - total_value - tx_builder.fee;
 
         // If we do, add an output for that as well.
+        let mut change_index: Option<usize> = None;
         if change > 0 {
             let change_public_address = from_account_key.subaddress(change_subaddress);
             let target_acct_pubkey = Self::get_fog_pubkey_for_public_address(
@@ -791,7 +795,7 @@ impl<T: UserTxConnection + 'static, FPR: FogPubkeyResolver + Send + Sync + 'stat
                 tombstone_block,
             )?;
 
-            tx_builder
+            let (change_tx_out, change_confirmation_number) = tx_builder
                 .add_output(
                     change,
                     &change_public_address,
@@ -801,6 +805,9 @@ impl<T: UserTxConnection + 'static, FPR: FogPubkeyResolver + Send + Sync + 'stat
                 .map_err(|err| {
                     Error::TxBuildError(format!("failed adding output (change): {}", err))
                 })?;
+            let change_index = Some(tx_out_to_outlay_index.len());
+            tx_out_to_outlay_index.insert(change_tx_out, tx_out_to_outlay_index.len());
+            outlay_confirmation_numbers.push(change_confirmation_number);
         }
 
         // Set tombstone block.
@@ -847,6 +854,7 @@ impl<T: UserTxConnection + 'static, FPR: FogPubkeyResolver + Send + Sync + 'stat
             tx,
             outlay_index_to_tx_out_index,
             outlay_confirmation_numbers,
+            change_index,
         })
     }
 

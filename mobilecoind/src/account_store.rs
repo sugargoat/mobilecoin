@@ -20,9 +20,12 @@ pub struct AccountData {
     pub monitor_id: Vec<u8>,
 
     #[prost(uint64, tag = "2")]
-    pub next_subaddress_index: u64,
+    pub first_subaddress_index: u64,
 
     #[prost(uint64, tag = "3")]
+    pub next_subaddress_index: u64,
+
+    #[prost(uint64, tag = "4")]
     pub change_subaddress: u64,
 }
 

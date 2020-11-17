@@ -18,6 +18,7 @@ mod monitor_store;
 mod processed_block_store;
 mod subaddress_store;
 mod sync;
+mod transaction_history_store;
 mod utxo_store;
 
 #[cfg(any(test, feature = "test_utils"))]

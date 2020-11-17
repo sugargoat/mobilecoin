@@ -9,6 +9,7 @@ use crate::{
     monitor_store::{MonitorData, MonitorId, MonitorStore},
     processed_block_store::{ProcessedBlockStore, ProcessedTxOut},
     subaddress_store::{SubaddressId, SubaddressSPKId, SubaddressStore},
+    transaction_history_store::TransactionHistoryStore,
     utxo_store::{UtxoId, UtxoStore},
 };
 
@@ -80,6 +81,9 @@ pub struct Database {
     /// Account store.
     account_store: AccountStore,
 
+    /// Transaction history store
+    transaction_history_store: TransactionHistoryStore,
+
     /// Logger.
     logger: Logger,
 }
@@ -113,6 +117,7 @@ impl Database {
         let processed_block_store = ProcessedBlockStore::new(env.clone(), logger.clone())?;
         let address_store = AddressStore::new(env.clone(), logger.clone())?;
         let account_store = AccountStore::new(env.clone(), logger.clone())?;
+        let transaction_history_store = TransactionHistoryStore::new(env.clone(), logger.clone())?;
 
         Ok(Self {
             env,
@@ -123,6 +128,7 @@ impl Database {
             metadata_store,
             address_store,
             account_store,
+            transaction_history_store,
             logger,
         })
     }
@@ -201,6 +207,19 @@ impl Database {
     ) -> Result<Vec<UnspentTxOut>, Error> {
         let db_txn = self.env.begin_ro_txn()?;
         self.utxo_store.get_utxos(&db_txn, monitor_id, index)
+    }
+
+    pub fn get_utxos_for_account(
+        &self,
+        monitor_id: &MonitorId,
+    ) -> Result<Vec<UnspentTxOut>, Error> {
+        let mut res: Vec<UnspentTxOut> = Vec::new();
+        // Get active subaddresses for this account
+        let account_data = self.get_account_data(monitor_id)?;
+        for i in account_data.first_subaddress_index..account_data.next_subaddress_index {
+            res.extend(self.get_utxos_for_subaddress(monitor_id, i)?);
+        }
+        Ok(res)
     }
 
     pub fn update_attempted_spend(
@@ -415,12 +434,14 @@ impl Database {
         let mut db_txn = self.env.begin_rw_txn()?;
         self.account_store
             .update_next_subaddress(&mut db_txn, account_key)?;
+        db_txn.commit()?;
         Ok(())
     }
 
-    pub fn get_account_data(&self, account_key: &AccountKey) -> Result<AccountData, Error> {
+    pub fn get_account_data(&self, monitor_id: &MonitorId) -> Result<AccountData, Error> {
         let db_txn = self.env.begin_ro_txn()?;
-        let account_data = self.account_store.get(&db_txn, account_key)?;
+        let monitor_data = self.get_monitor_data(&monitor_id)?;
+        let account_data = self.account_store.get(&db_txn, &monitor_data.account_key)?;
         Ok(account_data)
     }
 
@@ -430,10 +451,22 @@ impl Database {
         Ok(accounts)
     }
 
-    pub fn list_addresses(self) -> Result<HashMap<PublicAddress, AddressData>, Error> {
+    pub fn list_addresses(&self) -> Result<HashMap<PublicAddress, AddressData>, Error> {
         let db_txn = self.env.begin_ro_txn()?;
         let addresses = self.address_store.list_addresses(&db_txn)?;
         Ok(addresses)
+    }
+
+    pub fn add_transaction_data(
+        &self,
+        tx_id: TxHash,
+        transaction_data: TransactionData,
+    ) -> Result<(), Error> {
+        let mut db_txn = self.env.begin_rw_txn()?;
+        self.transaction_history_store
+            .insert(tx_id, transaction_data)?;
+        db_txn.commit()?;
+        Ok(())
     }
 }
 
