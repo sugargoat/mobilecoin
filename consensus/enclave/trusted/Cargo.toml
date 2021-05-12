@@ -1,3 +1,5 @@
+cargo-features = ["resolver"]
+
 [package]
 name = "mc-consensus-enclave-trusted"
 version = "1.0.1-pre1"
